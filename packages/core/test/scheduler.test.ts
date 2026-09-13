@@ -126,6 +126,16 @@ describe("Scheduler", () => {
     expect(errors).toEqual(["boom"]);
   });
 
+  it("prioritize is forwarded to sources that can act on it", async () => {
+    const { source, scheduler, run } = setup(["a", "b"]);
+    const asked: string[] = [];
+    (source as FakeSource & { prioritize: (s: Subject, ms: number) => void }).prioritize = (s, ms) =>
+      void asked.push(`${s.userId}:${ms}`);
+    await run(0);
+    scheduler.prioritize("b", 30_000);
+    expect(asked).toEqual(["b:30000"]);
+  });
+
   it("start/stop runs the loop with the injected sleep", async () => {
     const clock = { t: 0 };
     const seen: string[] = [];

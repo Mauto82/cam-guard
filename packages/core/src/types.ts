@@ -72,6 +72,12 @@ export interface Source {
   listActive(): Promise<Subject[]>;
   /** Grab one still of that subject, or null if it is no longer available. */
   capture(subject: Subject): Promise<Frame | null>;
+  /**
+   * The scheduler wants this subject sampled more often for `forMs`. Sources
+   * that pull frames need nothing here; sources whose frames are pushed by a
+   * client (which sets its own pace) forward the request to it.
+   */
+  prioritize?(subject: Subject, forMs: number): Promise<void> | void;
   close?(): Promise<void>;
 }
 
