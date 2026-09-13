@@ -22,6 +22,12 @@ export interface ReportEvent {
   frame: Frame;
 }
 
+export interface WatchEvent {
+  decision: Decision;
+  /** Sample this user more often for this long (e.g. `scheduler.prioritize`). */
+  forMs: number;
+}
+
 export interface ActionEvent {
   decision: Decision;
   action: ActionSpec;
@@ -31,6 +37,7 @@ export interface ActionEvent {
 export interface CamGuardEvents {
   detection: [DetectionEvent];
   report: [ReportEvent];
+  watch: [WatchEvent];
   action: [ActionEvent];
   error: [Error];
 }
@@ -125,6 +132,11 @@ export class CamGuard extends TypedEmitter<CamGuardEvents> {
   }
 
   private async handle(decision: Decision, frame: Frame, frames: EvidenceFrame[]): Promise<void> {
+    // A hint, not a verdict: no evidence is kept and nothing is done to the user.
+    if (decision.level === "watch") {
+      this.emit("watch", { decision, forMs: decision.watchForMs ?? 0 });
+      return;
+    }
     let record: EvidenceRecord | null = null;
     if (this.opts.evidence) {
       record = await this.opts.evidence.save({

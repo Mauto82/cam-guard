@@ -18,6 +18,7 @@ const decision = (over: Partial<Decision> = {}): Decision => ({
   evidence: [det("FEMALE_BREAST_EXPOSED", 0.9)],
   topScore: 0.9,
   frames: 2,
+  hits: 2,
   decidedAt: T0,
   ...over,
 });

@@ -1,0 +1,60 @@
+# cam-guard — policy with the OPTIONAL child-presence rule.
+#
+# Requires @cam-guard/detector-minor (person detector + age estimation), which
+# is not installed by default: it is far heavier than NudeNet — expect well
+# over 100 ms per frame on CPU — so enable it only on a machine that can take
+# it, and sample it less often than the nudity detector.
+#
+# Typical case it is tuned for: a parent on camera, children walking in and out
+# of shot or visible in the background. Hence `frames: 2 of 5` rather than
+# consecutive frames — a child crossing the room must not reset the count.
+#
+# Report-only on purpose: age estimation errs by several years around 10–13
+# and misfires on photos, posters and TV screens. Moderators review first; add
+# an `act` block only once thresholds are tuned on your own traffic, e.g.
+#
+#   act:
+#     threshold: 0.9
+#     steps:
+#       - [report, { type: warn, message: "…" }, { type: kick, delay: 5s }]
+
+version: 1
+
+x-rules:
+  explicit-nudity: &explicit-nudity
+    id: explicit-nudity
+    labels: [FEMALE_GENITALIA_EXPOSED, MALE_GENITALIA_EXPOSED, ANUS_EXPOSED, FEMALE_BREAST_EXPOSED, BUTTOCKS_EXPOSED]
+    minArea: 0.002
+    consecutiveFrames: 3
+    watch: { threshold: 0.4, for: 2m }
+    report: { threshold: 0.6, actions: [report] }
+    act:
+      threshold: 0.85
+      window: 24h
+      steps:
+        - [report, close_cam, { type: warn, message: "La tua webcam è stata chiusa: in questa stanza il nudo non è consentito." }]
+        - [report, { type: kick, message: "Nudo ripetuto." }, { type: suspend, hours: 24, message: "Nudo ripetuto." }]
+
+  child-present: &child-present
+    id: child-present
+    labels: [CHILD_PRESENT]
+    frames: { hits: 2, of: 5 }
+    # Small or partial detections still count: children in the background are small.
+    minArea: 0
+    watch: { threshold: 0.5, for: 1m }
+    report: { threshold: 0.7, actions: [report] }
+
+profiles:
+  strict:
+    rules: [*explicit-nudity, *child-present]
+  adults:
+    rules:
+      - <<: *explicit-nudity
+        report: { threshold: 0.85, actions: [report] }
+        act: null
+      - *child-present
+
+rooms:
+  default: strict
+  overrides:
+    "adults-*": adults

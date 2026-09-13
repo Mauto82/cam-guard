@@ -1,7 +1,11 @@
 import type { ActionSpec, Detection, Subject } from "../types.js";
-import type { PolicyConfig, Rule } from "./config.js";
+import { ruleFrames, type PolicyConfig, type Rule } from "./config.js";
 
-export type DecisionLevel = "report" | "act";
+/**
+ * `act` and `report` are verdicts. `watch` is only a hint — something scored
+ * above the rule's watch threshold — asking the scheduler to look again soon.
+ */
+export type DecisionLevel = "watch" | "report" | "act";
 
 /** What the policy wants done about one frame. Pure data: nothing is executed here. */
 export interface Decision {
@@ -10,13 +14,17 @@ export interface Decision {
   level: DecisionLevel;
   subject: Subject;
   actions: ActionSpec[];
-  /** 1-based offence number within the rule's window (act level only; 0 for reports). */
+  /** 1-based offence number within the rule's window (act level only; 0 otherwise). */
   offence: number;
   /** Detections that satisfied the rule on the deciding frame. */
   evidence: Detection[];
   topScore: number;
-  /** Consecutive frames that led here. */
+  /** Frames in the window that led here (hits and misses). */
   frames: number;
+  /** How many of those frames hit. */
+  hits: number;
+  /** Only on `watch`: how long the user should be sampled more often. */
+  watchForMs?: number;
   decidedAt: number;
 }
 
@@ -37,7 +45,10 @@ export interface UserState {
 }
 
 interface Streak {
-  count: number;
+  /** Hit/miss of the last `of` frames, oldest first. */
+  ring: boolean[];
+  /** Clean frames in a row, to tell when an episode is over. */
+  missRun: number;
   fired: boolean;
   firedAt: number;
 }
@@ -51,6 +62,8 @@ interface RuleMemory {
   reports: number;
   acts: number;
   warnings: number;
+  /** No `watch` hint before this time: one per half watch period is enough. */
+  watchQuietUntil: number;
 }
 
 interface UserMemory {
@@ -61,8 +74,10 @@ interface UserMemory {
 const OFF = "off";
 
 function newStreak(): Streak {
-  return { count: 0, fired: false, firedAt: 0 };
+  return { ring: [], missRun: 0, fired: false, firedAt: 0 };
 }
+
+const hitCount = (s: Streak) => s.ring.reduce((n, h) => n + (h ? 1 : 0), 0);
 
 function globMatch(pattern: string, value: string): boolean {
   if (!pattern.includes("*")) return pattern === value;
@@ -77,29 +92,33 @@ function area(d: Detection): number {
 /**
  * Advance a streak by one frame and say whether it fires now.
  *
- * A streak fires once when it reaches `need` frames, then stays quiet while it
- * keeps hitting — firing every frame would warn someone ten times in ten
- * seconds. After `rearmAfter` it re-arms and needs `need` fresh frames again,
- * so persisting after a warning does eventually escalate.
+ * Fires once when `hits` of the last `of` frames hit, then stays quiet while
+ * the episode goes on — firing every frame would warn someone ten times in ten
+ * seconds. The episode is over after `of - hits + 1` clean frames in a row
+ * (for "3 consecutive" that is a single clean frame): past that, no window can
+ * still be counting its hits. If it never ends, it re-arms after
+ * `rearmAfter` and needs fresh hits, so ignoring a warning still escalates.
  */
-function step(streak: Streak, hit: boolean, need: number, rearmAfter: number, now: number): boolean {
-  if (!hit) {
-    streak.count = 0;
+function step(streak: Streak, hit: boolean, hits: number, of: number, rearmAfter: number, now: number): boolean {
+  if (hit && streak.fired && now - streak.firedAt >= rearmAfter) {
     streak.fired = false;
-    return false;
+    streak.ring = [];
+    streak.missRun = 0;
   }
-  if (streak.fired && now - streak.firedAt >= rearmAfter) {
-    streak.fired = false;
-    streak.count = 0;
-  }
-  streak.count += 1;
-  if (!streak.fired && streak.count >= need) {
+  streak.ring.push(hit);
+  if (streak.ring.length > of) streak.ring.shift();
+  streak.missRun = hit ? 0 : streak.missRun + 1;
+  if (streak.fired && streak.missRun >= of - hits + 1) streak.fired = false;
+
+  if (hit && !streak.fired && hitCount(streak) >= hits) {
     streak.fired = true;
     streak.firedAt = now;
     return true;
   }
   return false;
 }
+
+const LEVEL_ORDER: Record<DecisionLevel, number> = { act: 0, report: 1, watch: 2 };
 
 /**
  * Turns detections into decisions, remembering per user what happened before.
@@ -142,7 +161,7 @@ export class PolicyEngine {
     }
     // Act-level first: an executor that stops at the first kick should not
     // have spent its time on a report about the same frame.
-    return decisions.sort((a, b) => (a.level === b.level ? 0 : a.level === "act" ? -1 : 1));
+    return decisions.sort((a, b) => LEVEL_ORDER[a.level] - LEVEL_ORDER[b.level]);
   }
 
   private evaluateRule(
@@ -157,9 +176,9 @@ export class PolicyEngine {
     mem.window = rule.act?.window;
     const candidates = detections.filter((d) => rule.labels.includes(d.label) && area(d) >= rule.minArea);
 
-    const threshold = (d: Detection, level: DecisionLevel): number | undefined =>
+    const threshold = (d: Detection, level: "report" | "act"): number | undefined =>
       rule.perLabel[d.label]?.[level] ?? rule[level]?.threshold;
-    const hitsAt = (level: DecisionLevel) =>
+    const hitsAt = (level: "report" | "act") =>
       rule[level]
         ? candidates.filter((d) => {
             const t = threshold(d, level);
@@ -169,10 +188,10 @@ export class PolicyEngine {
 
     const actHits = hitsAt("act");
     const reportHits = hitsAt("report");
-    const need = rule.consecutiveFrames;
+    const { hits, of } = ruleFrames(rule);
 
-    const actFires = step(mem.act, actHits.length > 0, need, rule.rearmAfter, now);
-    const reportFires = step(mem.report, reportHits.length > 0, need, rule.rearmAfter, now);
+    const actFires = step(mem.act, actHits.length > 0, hits, of, rule.rearmAfter, now);
+    const reportFires = step(mem.report, reportHits.length > 0, hits, of, rule.rearmAfter, now);
 
     if (actFires && rule.act) {
       const window = rule.act.window;
@@ -188,12 +207,23 @@ export class PolicyEngine {
       // The same streak must not also produce a separate report.
       mem.report.fired = true;
       mem.report.firedAt = now;
-      return this.decision(rule, profile, "act", subject, actions, offence, actHits, mem.act.count, now);
+      return this.decision(rule, profile, "act", subject, actions, offence, actHits, mem.act, now);
     }
 
     if (reportFires && rule.report) {
       mem.reports += 1;
-      return this.decision(rule, profile, "report", subject, rule.report.actions, 0, reportHits, mem.report.count, now);
+      return this.decision(rule, profile, "report", subject, rule.report.actions, 0, reportHits, mem.report, now);
+    }
+
+    if (rule.watch && now >= mem.watchQuietUntil) {
+      const watchThreshold = rule.watch.threshold;
+      const watchHits = candidates.filter((d) => d.score >= watchThreshold);
+      if (watchHits.length > 0) {
+        mem.watchQuietUntil = now + rule.watch.for / 2;
+        const d = this.decision(rule, profile, "watch", subject, [], 0, watchHits, mem.report, now);
+        d.watchForMs = rule.watch.for;
+        return d;
+      }
     }
     return null;
   }
@@ -206,7 +236,7 @@ export class PolicyEngine {
     actions: ActionSpec[],
     offence: number,
     evidence: Detection[],
-    frames: number,
+    streak: Streak,
     now: number,
   ): Decision {
     const sorted = [...evidence].sort((a, b) => b.score - a.score);
@@ -219,7 +249,8 @@ export class PolicyEngine {
       offence,
       evidence: sorted,
       topScore: sorted[0]?.score ?? 0,
-      frames,
+      frames: Math.max(1, streak.ring.length),
+      hits: Math.max(1, hitCount(streak)),
       decidedAt: now,
     };
   }
@@ -285,7 +316,16 @@ export class PolicyEngine {
   private ruleMemory(user: UserMemory, ruleId: string): RuleMemory {
     let mem = user.rules.get(ruleId);
     if (!mem) {
-      mem = { report: newStreak(), act: newStreak(), window: undefined, offences: [], reports: 0, acts: 0, warnings: 0 };
+      mem = {
+        report: newStreak(),
+        act: newStreak(),
+        window: undefined,
+        offences: [],
+        reports: 0,
+        acts: 0,
+        warnings: 0,
+        watchQuietUntil: Number.NEGATIVE_INFINITY,
+      };
       user.rules.set(ruleId, mem);
     }
     return mem;

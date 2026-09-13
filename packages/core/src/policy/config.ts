@@ -70,8 +70,27 @@ const ruleSchema = z
     labels: z.array(z.string().min(1)).min(1),
     /** Smallest box that counts, as a fraction of the frame area (0..1). */
     minArea: score.default(0),
-    /** Frames in a row that must hit before anything fires. */
-    consecutiveFrames: z.number().int().min(1).default(1),
+    /** Frames in a row that must hit before anything fires. Shorthand for `frames: { hits: N, of: N }`. */
+    consecutiveFrames: z.number().int().min(1).optional(),
+    /**
+     * Fire when `hits` of the last `of` frames hit. Unlike consecutive frames
+     * it tolerates gaps — someone walking in and out of shot, a detection
+     * that flickers — without restarting the count.
+     */
+    frames: z
+      .object({ hits: z.number().int().min(1), of: z.number().int().min(1) })
+      .strict()
+      .optional(),
+    /**
+     * Below the report threshold, a hint that something may be there: the
+     * engine emits a `watch` decision so the scheduler samples this user more
+     * often for `for`, and a real case is confirmed in seconds instead of
+     * waiting for the next round.
+     */
+    watch: z
+      .object({ threshold: score, for: duration.default(120_000) })
+      .strict()
+      .optional(),
     /**
      * While a streak keeps hitting after firing, fire again only after this
      * long. Without it a user who ignores a warning would never escalate,
@@ -106,6 +125,22 @@ const ruleSchema = z
   })
   .strict()
   .superRefine((rule, ctx) => {
+    if (rule.consecutiveFrames !== undefined && rule.frames) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `rule "${rule.id}": use \`consecutiveFrames\` or \`frames\`, not both` });
+    }
+    if (rule.frames && rule.frames.hits > rule.frames.of) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `rule "${rule.id}": frames.hits (${rule.frames.hits}) cannot exceed frames.of (${rule.frames.of})`,
+      });
+    }
+    const lowest = Math.min(rule.report?.threshold ?? 1, rule.act?.threshold ?? 1);
+    if (rule.watch && rule.watch.threshold > lowest) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `rule "${rule.id}": watch threshold (${rule.watch.threshold}) is above the report/act threshold (${lowest})`,
+      });
+    }
     if (!rule.report && !rule.act) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: `rule "${rule.id}" needs \`report\` and/or \`act\`` });
     }
@@ -124,6 +159,9 @@ const ruleSchema = z
       }
     }
   });
+// No `.transform` here on purpose: a transform after a failed refinement makes
+// zod abort the parent, and the config-level checks (unknown profiles,
+// duplicate ids) would then go unreported. See `ruleFrames`.
 
 /**
  * `report: null` / `act: null` mean "this rule does not do that here" — how a
@@ -181,6 +219,13 @@ export const policyConfigSchema = z
 export type PolicyConfig = z.output<typeof policyConfigSchema>;
 export type PolicyConfigInput = z.input<typeof policyConfigSchema>;
 export type Rule = z.output<typeof ruleSchema>;
+
+/** The frame window a rule needs: `frames`, or `consecutiveFrames` as N of N (default 1 of 1). */
+export function ruleFrames(rule: Rule): { hits: number; of: number } {
+  if (rule.frames) return rule.frames;
+  const n = rule.consecutiveFrames ?? 1;
+  return { hits: n, of: n };
+}
 
 export class PolicyConfigError extends Error {
   constructor(readonly issues: string[]) {

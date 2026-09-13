@@ -6,8 +6,11 @@ import {
   CamGuard,
   EvidenceStore,
   loadPolicyConfig,
+  parsePolicyConfig,
   PolicyEngine,
   type ActionEvent,
+  type PolicyConfig,
+  type WatchEvent,
   type Detection,
   type Detector,
   type ReportEvent,
@@ -51,14 +54,15 @@ describe("CamGuard pipeline", () => {
     suspend: async (s: Subject, hours: number) => void calls.push(`suspend ${s.userId} ${hours}h`),
   };
 
-  async function make(mode: "report" | "auto", extra: { dryRun?: boolean } = {}) {
+  async function make(mode: "report" | "auto", extra: { dryRun?: boolean; policy?: PolicyConfig } = {}) {
+    const { policy, ...rest } = extra;
     const guard = new CamGuard({
       detectors: [detector],
-      policy: new PolicyEngine(await loadPolicyConfig(EXAMPLE)),
+      policy: new PolicyEngine(policy ?? (await loadPolicyConfig(EXAMPLE))),
       evidence: new EvidenceStore({ dir }),
       actions: adapters,
       mode,
-      ...extra,
+      ...rest,
       setTimer: (fn, ms) => {
         const t = { fn, ms };
         timers.push(t);
@@ -112,7 +116,27 @@ describe("CamGuard pipeline", () => {
   });
 
   it("delayed actions: warn now, kick after 5 s; close() cancels pending ones", async () => {
-    const { guard, actions } = await make("auto");
+    const { guard, actions } = await make("auto", {
+      policy: parsePolicyConfig({
+        version: 1,
+        profiles: {
+          p: {
+            rules: [
+              {
+                id: "child-present",
+                labels: ["CHILD_PRESENT"],
+                consecutiveFrames: 3,
+                act: {
+                  threshold: 0.8,
+                  steps: [["report", { type: "warn", message: "Non è consentito" }, { type: "kick", delay: "5s" }]],
+                },
+              },
+            ],
+          },
+        },
+        rooms: { default: "p" },
+      }),
+    });
     detector.next = [det("CHILD_PRESENT", 0.9)];
     await run(guard, 3);
     expect(calls).toEqual(["warn u1 Non è cons"]);
@@ -167,6 +191,19 @@ describe("CamGuard pipeline", () => {
       22 * 60 * SEC + SEC,
       22 * 60 * SEC + 2 * SEC,
     ]);
+  });
+
+  it("watch hints are emitted, with no evidence saved and nothing executed", async () => {
+    const { guard, reports, actions } = await make("auto");
+    const watches: WatchEvent[] = [];
+    guard.on("watch", (e) => watches.push(e));
+    detector.next = [det("FEMALE_BREAST_EXPOSED", 0.5)]; // above watch (0.4), below report (0.6)
+    await run(guard, 5);
+    expect(watches).toHaveLength(1);
+    expect(watches[0]!.forMs).toBe(120_000);
+    expect(reports).toEqual([]);
+    expect(actions).toEqual([]);
+    expect(await new EvidenceStore({ dir }).list()).toEqual([]);
   });
 
   it("emits detection for every frame, decisions or not", async () => {

@@ -18,6 +18,7 @@ export {
   parsePolicyConfig,
   policyConfigSchema,
   PolicyConfigError,
+  ruleFrames,
   unknownLabels,
   type PolicyConfig,
   type PolicyConfigInput,
@@ -54,4 +55,5 @@ export {
   type DetectionEvent,
   type GuardMode,
   type ReportEvent,
+  type WatchEvent,
 } from "./guard.js";

@@ -1,5 +1,9 @@
-# cam-guard — example policy.
+# cam-guard — example policy (nudity only).
 # Validated by the test suite, so what you read here is what the engine accepts.
+#
+# Child-presence detection is optional and off here: it needs the separate
+# @cam-guard/detector-minor package and much more CPU. See
+# examples/policy.with-children.yaml.
 
 version: 1
 
@@ -16,6 +20,11 @@ x-rules:
     minArea: 0.002            # ignore boxes smaller than 0.2% of the frame
     consecutiveFrames: 3      # three frames in a row before anything fires
     rearmAfter: 60s
+    # A first hint (≥ 0.4) makes the scheduler sample this user every few
+    # seconds for 2 minutes, so the three frames arrive quickly.
+    watch:
+      threshold: 0.4
+      for: 2m
     report:
       threshold: 0.6
       actions: [report]
@@ -37,27 +46,10 @@ x-rules:
             message: "Nudo ripetuto in una stanza dove non è consentito."
         # A permanent ban is never automatic: moderators decide from the dashboard.
 
-  child-present: &child-present
-    id: child-present
-    labels: [CHILD_PRESENT]
-    consecutiveFrames: 3
-    act:
-      threshold: 0.8
-      # No `window`: no automatic escalation. Each case repeats this step and
-      # increments a counter visible to moderators.
-      steps:
-        - - report
-          - type: warn
-            message: "Non è consentito avere minori davanti alla webcam. Verrai disconnesso tra 5 secondi."
-          - type: kick
-            delay: 5s
-            message: "Minore presente davanti alla webcam."
-
 profiles:
   strict:
     rules:
       - *explicit-nudity
-      - *child-present
 
   # Rooms where nudity between adults is allowed: only report it, never act.
   adults:
@@ -67,7 +59,6 @@ profiles:
           threshold: 0.85
           actions: [report]
         act: null
-      - *child-present
 
 rooms:
   default: strict

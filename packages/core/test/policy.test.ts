@@ -6,21 +6,33 @@ import {
   parsePolicyConfig,
   PolicyConfigError,
   PolicyEngine,
+  ruleFrames,
   unknownLabels,
   type PolicyConfig,
 } from "../src/index.js";
 import { det, HOUR, MIN, SEC, subject } from "./helpers.js";
 
 const EXAMPLE = resolve(import.meta.dirname, "../../../policy.example.yaml");
+const WITH_CHILDREN = resolve(import.meta.dirname, "../../../examples/policy.with-children.yaml");
 
 const NUDITY = "FEMALE_BREAST_EXPOSED";
 
-/** Feed `n` identical frames one second apart, starting at `t`. Returns all decisions. */
+/** Feed `n` identical frames one second apart, starting at `t`. Returns the verdicts (watch hints left out). */
 function feed(engine: PolicyEngine, n: number, t: number, detections = [det(NUDITY, 0.9)], s = subject()) {
   const out = [];
   for (let i = 0; i < n; i++) out.push(...engine.evaluate(s, detections, t + i * SEC));
-  return out;
+  return out.filter((d) => d.level !== "watch");
 }
+
+/** Feed a hit/miss pattern ("xx.x" = hit hit miss hit), one frame per second. */
+function pattern(engine: PolicyEngine, p: string, t = 0, hit = [det("X", 0.9)], s = subject()) {
+  return [...p].flatMap((c, i) => engine.evaluate(s, c === "x" ? hit : [], t + i * SEC)).filter((d) => d.level !== "watch");
+}
+
+const single = (rule: Record<string, unknown>) =>
+  new PolicyEngine(
+    parsePolicyConfig({ version: 1, profiles: { p: { rules: [{ id: "r", labels: ["X"], ...rule }] } }, rooms: { default: "p" } }),
+  );
 
 describe("parseDuration", () => {
   it("parses units and plain numbers", () => {
@@ -39,16 +51,36 @@ describe("parseDuration", () => {
 });
 
 describe("policy config", () => {
-  it("loads the example policy shipped in the README", async () => {
+  it("loads the example policy shipped in the README: nudity only", async () => {
     const cfg = await loadPolicyConfig(EXAMPLE);
     expect(Object.keys(cfg.profiles)).toEqual(["strict", "adults"]);
+    expect(cfg.profiles.strict!.rules.map((r) => r.id)).toEqual(["explicit-nudity"]);
     const adultsNudity = cfg.profiles.adults!.rules[0]!;
     expect(adultsNudity.act).toBeUndefined();
     expect(adultsNudity.report?.threshold).toBe(0.85);
     // The merge key kept everything else from the shared rule.
-    expect(adultsNudity.consecutiveFrames).toBe(3);
-    const child = cfg.profiles.strict!.rules[1]!;
-    expect(child.act?.steps[0]).toContainEqual({ type: "kick", delayMs: 5_000, message: expect.any(String) });
+    expect(ruleFrames(adultsNudity)).toEqual({ hits: 3, of: 3 });
+    expect(adultsNudity.watch).toEqual({ threshold: 0.4, for: 120_000 });
+  });
+
+  it("loads the optional child-presence example: report only, 2 of 5 frames", async () => {
+    const cfg = await loadPolicyConfig(WITH_CHILDREN);
+    const child = cfg.profiles.strict!.rules.find((r) => r.id === "child-present")!;
+    expect(child.frames).toEqual({ hits: 2, of: 5 });
+    expect(child.report?.threshold).toBe(0.7);
+    expect(child.act).toBeUndefined();
+  });
+
+  it("rejects inconsistent frame and watch settings", () => {
+    const bad = (rule: Record<string, unknown>) => () =>
+      parsePolicyConfig({
+        version: 1,
+        profiles: { p: { rules: [{ id: "r", labels: ["X"], report: { threshold: 0.6 }, ...rule }] } },
+        rooms: { default: "p" },
+      });
+    expect(bad({ consecutiveFrames: 3, frames: { hits: 2, of: 5 } })).toThrow(/not both/);
+    expect(bad({ frames: { hits: 6, of: 5 } })).toThrow(/cannot exceed/);
+    expect(bad({ watch: { threshold: 0.7 } })).toThrow(/watch threshold \(0.7\) is above/);
   });
 
   it("refuses an automatic ban", () => {
@@ -131,9 +163,10 @@ describe("PolicyEngine", () => {
   describe("consecutive frames", () => {
     it("fires only on the third frame in a row", () => {
       const e = engine();
-      expect(e.evaluate(subject(), [det(NUDITY, 0.9)], 0)).toEqual([]);
-      expect(e.evaluate(subject(), [det(NUDITY, 0.9)], SEC)).toEqual([]);
-      const [d] = e.evaluate(subject(), [det(NUDITY, 0.9)], 2 * SEC);
+      const verdicts = (t: number) => e.evaluate(subject(), [det(NUDITY, 0.9)], t).filter((d) => d.level !== "watch");
+      expect(verdicts(0)).toEqual([]);
+      expect(verdicts(SEC)).toEqual([]);
+      const [d] = verdicts(2 * SEC);
       expect(d).toMatchObject({ ruleId: "explicit-nudity", level: "act", offence: 1, frames: 3 });
     });
 
@@ -254,7 +287,24 @@ describe("PolicyEngine", () => {
     });
 
     it("a rule without window never escalates but keeps counting", () => {
-      const e = engine();
+      const e = new PolicyEngine(
+        parsePolicyConfig({
+          version: 1,
+          profiles: {
+            p: {
+              rules: [
+                {
+                  id: "child-present",
+                  labels: ["CHILD_PRESENT"],
+                  consecutiveFrames: 3,
+                  act: { threshold: 0.8, steps: [["report", { type: "warn", message: "m" }, { type: "kick", delay: "5s", message: "k" }]] },
+                },
+              ],
+            },
+          },
+          rooms: { default: "p" },
+        }),
+      );
       const child = [det("CHILD_PRESENT", 0.9)];
       for (let i = 0; i < 3; i++) {
         const [d] = feed(e, 3, i * HOUR, child);
@@ -275,9 +325,69 @@ describe("PolicyEngine", () => {
       expect(decisions[0]!.level).toBe("report");
     });
 
-    it("in an adults room a child is still acted on", () => {
-      const [d] = feed(engine(), 3, 0, [det("CHILD_PRESENT", 0.9)], subject("u", "adults-1"));
-      expect(d!.level).toBe("act");
+    it("with the optional child rule, a child is reported in adults rooms too", async () => {
+      const e = new PolicyEngine(await loadPolicyConfig(WITH_CHILDREN));
+      const [d] = feed(e, 2, 0, [det("CHILD_PRESENT", 0.8)], subject("u", "adults-1"));
+      expect(d).toMatchObject({ ruleId: "child-present", level: "report", hits: 2 });
+    });
+  });
+
+  describe("N of M frames", () => {
+    const rule = { frames: { hits: 2, of: 5 }, report: { threshold: 0.5 } };
+
+    it("tolerates gaps: someone walking in and out of shot", () => {
+      expect(pattern(single(rule), "x...x")).toMatchObject([{ level: "report", hits: 2, frames: 5 }]);
+    });
+
+    it("hits too far apart do not add up", () => {
+      expect(pattern(single(rule), "x.....x")).toEqual([]);
+    });
+
+    it("an episode with gaps fires once, not on every hit", () => {
+      expect(pattern(single(rule), "xx.x.xx.x")).toHaveLength(1);
+    });
+
+    it("a new episode fires again after of - hits + 1 clean frames", () => {
+      // 4 clean frames end the episode (5 - 2 + 1); then two hits fire again.
+      expect(pattern(single(rule), "xx....xx")).toHaveLength(2);
+      // Only 3 clean frames: still the same episode.
+      expect(pattern(single(rule), "xx...xx")).toHaveLength(1);
+    });
+
+    it("consecutiveFrames: N is N of N", () => {
+      const consecutive = single({ consecutiveFrames: 3, report: { threshold: 0.5 } });
+      expect(pattern(consecutive, "xx.xx")).toEqual([]);
+      expect(pattern(consecutive, "xxx", 10 * SEC)).toHaveLength(1);
+    });
+  });
+
+  describe("watch", () => {
+    const rule = { consecutiveFrames: 3, watch: { threshold: 0.4, for: "2m" }, report: { threshold: 0.6 } };
+    const all = (e: PolicyEngine, n: number, score: number, t = 0) =>
+      Array.from({ length: n }, (_, i) => e.evaluate(subject(), [det("X", score)], t + i * SEC)).flat();
+
+    it("a first hint asks to look again soon, before any verdict", () => {
+      const [first] = all(single(rule), 1, 0.9);
+      expect(first).toMatchObject({ level: "watch", watchForMs: 120_000, actions: [] });
+    });
+
+    it("scores between watch and report thresholds only ever watch", () => {
+      const decisions = all(single(rule), 5, 0.5);
+      expect(decisions.map((d) => d.level)).toEqual(["watch"]);
+    });
+
+    it("is throttled to once per half watch period", () => {
+      const decisions = all(single(rule), 130, 0.5);
+      expect(decisions.map((d) => d.decidedAt)).toEqual([0, 60 * SEC, 120 * SEC]);
+    });
+
+    it("no watch on the frame that produces a verdict", () => {
+      const levels = all(single(rule), 3, 0.9).map((d) => d.level);
+      expect(levels).toEqual(["watch", "report"]);
+    });
+
+    it("below the watch threshold: nothing", () => {
+      expect(all(single(rule), 5, 0.3)).toEqual([]);
     });
   });
 
