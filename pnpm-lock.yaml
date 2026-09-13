@@ -26,6 +26,16 @@ importers:
       '@cam-guard/detector-nudenet':
         specifier: workspace:*
         version: link:../../packages/detector-nudenet
+      yaml:
+        specifier: ^2.6.0
+        version: 2.9.1
+      zod:
+        specifier: ^3.24.0
+        version: 3.25.76
+    devDependencies:
+      sharp:
+        specifier: ^0.34.0
+        version: 0.34.5
 
   packages/core:
     dependencies:

@@ -1,0 +1,38 @@
+# cam-guard bot — example config. Paths are relative to this file.
+#
+#   pnpm cam-guard run --config examples/bot.yaml --fast --once
+#
+# Try it without a chat: put images in examples/frames/<room>/<user>/…
+# (each user folder is a camera, images are its frames in filename order).
+
+# report: only report, nothing is done to users. auto: call the adapters.
+mode: report
+dryRun: false
+
+policy: ../policy.example.yaml
+
+evidence:
+  dir: ../evidence
+  retention: 30d
+  confirmedRetention: 365d
+
+detector:
+  nudenet:
+    model: 320n        # 640m: slower, needs GITHUB_TOKEN to download
+    channels: rgb      # bgr: same scores as the upstream Python package
+
+scheduler:
+  interval: 10s          # one frame per camera every 10 s…
+  priorityInterval: 2s   # …every 2 s for someone being watched or just reported
+
+source:
+  folder:
+    dir: frames
+    loop: false
+
+# Needed only with `mode: auto`. A module exporting warn/closeCam/kick/suspend.
+# adapters: ./adapters.example.mjs
+
+log:
+  format: text           # json: one JSON object per line
+  detections: false      # true: also log every analysed frame

@@ -7,12 +7,19 @@
   "bin": {
     "cam-guard": "./dist/cli.js"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
     "@cam-guard/core": "workspace:*",
-    "@cam-guard/detector-nudenet": "workspace:*"
+    "@cam-guard/detector-nudenet": "workspace:*",
+    "yaml": "^2.6.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "sharp": "^0.34.0"
   }
 }

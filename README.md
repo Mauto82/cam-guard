@@ -11,8 +11,9 @@ Platform-agnostic by design: cam-guard knows nothing about any chat. You give
 it a way to grab frames and a set of functions to warn, close a camera, kick or
 suspend; it gives you decisions, evidence and events.
 
-> Status: early. `core` and `detector-nudenet` work; the bot runs `detect`.
-> Sources, notifiers and the dashboard come next.
+> Status: early. `core`, `detector-nudenet` and the bot work end to end on a
+> folder of images. The Playwright source, notifiers and the dashboard come
+> next.
 
 **Out of the box it detects explicit nudity only.** Child-presence detection
 is optional: a separate package, off by default, because it is much heavier
@@ -52,7 +53,7 @@ won't fit on a modest server alongside the nudity detector.
 |---|---|
 | `@cam-guard/core` | Types, `PolicyEngine`, `Scheduler`, `EvidenceStore`, the `CamGuard` pipeline and its typed events |
 | `@cam-guard/detector-nudenet` | NudeNet v3 (YOLOv8) on ONNX Runtime, CPU |
-| `@cam-guard/bot` | The `cam-guard` executable |
+| `@cam-guard/bot` | The `cam-guard` executable: `run` (the moderation loop, from a config file) and `detect` (one-off timings on images) |
 | *planned, optional* `@cam-guard/detector-minor` | Presence of young children (person detector + MiVOLO v2 age estimation). Not installed by default |
 | *planned* `@cam-guard/source-playwright` | Grab frames from `<video>` elements of a web chat |
 | *planned* `@cam-guard/notify-telegram` | Reports to moderators with the frame attached |
@@ -77,6 +78,53 @@ photo.jpg  (1024×600, nudenet-320n)
   model load 41.2 ms · first run 16.1 ms (warm-up, not counted)
   ✓ within the 100 ms budget
 ```
+
+## Try it without a chat
+
+The bot runs the whole loop — source, detector, policy, evidence, actions —
+from a config file. With the built-in **folder source** every user folder is a
+camera and its images are the frames it shows, in filename order:
+
+```
+examples/frames/
+  lobby/            ← room
+    alice/          ← user = one camera
+      0001.jpg      ← frames
+      0002.jpg
+  adults-1/
+    carol/
+      …
+```
+
+```bash
+pnpm cam-guard run --config examples/bot.yaml --fast --once
+```
+
+- `--fast` replays with a virtual clock: frames 10 s apart are processed back
+  to back, and decisions are the same as in real time because the policy takes
+  time from the frames.
+- `--once` stops when every camera has run out of frames.
+- `--mode auto` calls the platform adapters; `--dry-run` records what would
+  have been done without doing it.
+
+Output, one line per event (`log.format: json` for machine-readable lines):
+
+```
+… START  mode=report detectors=nudenet-320n source=folder:frames clock=virtual
+… WATCH  alice@lobby explicit-nudity top=0.52 → sampling faster for 120 s
+… REPORT alice@lobby explicit-nudity act offence=1 top=0.95 (FEMALE_BREAST_EXPOSED) hits=3/3 evidence=1757790000000-3f2a9c1e
+… ACTION alice@lobby close_cam → report_only
+… ACTION alice@lobby warn → report_only
+```
+
+See [`examples/bot.yaml`](examples/bot.yaml) for every option. Two extension
+points take a module path instead of built-in code:
+
+- `adapters:` — your platform's `warn`, `closeCam`, `kick`, `suspend`
+  (named or default exports); needed only in `auto` mode. Template:
+  [`examples/adapters.example.mjs`](examples/adapters.example.mjs).
+- `source: { module: ./my-source.mjs, options: {…} }` — a module whose
+  default export `(options) => Source` grabs frames from wherever you like.
 
 ## The pipeline in code
 

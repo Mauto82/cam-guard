@@ -10,3 +10,6 @@ models/
 
 # Evidence may contain real frames of real people.
 evidence/
+
+# Example frames for the folder source: your own images, never committed.
+examples/frames/

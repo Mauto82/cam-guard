@@ -1,18 +1,30 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
 import type { NudeNetModel } from "@cam-guard/detector-nudenet";
+import { loadBotConfig } from "./config.js";
 import { detectFiles, formatReport } from "./detect.js";
+import { formatSummary, runBot } from "./run.js";
 
 const USAGE = `cam-guard — local webcam moderation
 
 Usage:
+  cam-guard run --config bot.yaml [--mode report|auto] [--dry-run] [--fast] [--once]
   cam-guard detect <image...> [--model 320n|640m] [--runs N] [--threads N] [--channels rgb|bgr] [--json]
 
 Commands:
+  run       Run the moderation loop described by a config file: source →
+            detector → policy → evidence → actions. Stop with Ctrl-C.
   detect    Run NudeNet on still images and print detections and timings.
             The model is downloaded on first use and checked by sha256.
 
-Options:
+Options for run:
+  --config    bot config (YAML/JSON); see examples/bot.yaml
+  --mode      override the config: report (only report) or auto (call adapters)
+  --dry-run   resolve every action as a dry run
+  --fast      virtual clock: replay a folder source without real waiting
+  --once      stop when no camera is left instead of waiting for new ones
+
+Options for detect:
   --model     320n (default, fast) or 640m (needs GITHUB_TOKEN to download)
   --runs      timed runs per image after one warm-up run (default 5)
   --threads   ONNX Runtime intra-op threads (default: runtime decides)
@@ -33,6 +45,7 @@ async function main(argv: string[]): Promise<number> {
     return command ? 0 : 1;
   }
 
+  if (command === "run") return run(rest);
   if (command !== "detect") {
     process.stderr.write(`unknown command "${command}"\n\n${USAGE}`);
     return 1;
@@ -88,6 +101,54 @@ async function main(argv: string[]): Promise<number> {
 
   if (values.json) process.stdout.write(`${JSON.stringify(reports, null, 2)}\n`);
   else process.stdout.write(`${reports.map(formatReport).join("\n\n")}\n`);
+  return 0;
+}
+
+async function run(args: string[]): Promise<number> {
+  const { values } = parseArgs({
+    args,
+    options: {
+      config: { type: "string", short: "c" },
+      mode: { type: "string" },
+      "dry-run": { type: "boolean", default: false },
+      fast: { type: "boolean", default: false },
+      once: { type: "boolean", default: false },
+      help: { type: "boolean", short: "h", default: false },
+    },
+  });
+  if (values.help) {
+    process.stdout.write(USAGE);
+    return 0;
+  }
+  if (!values.config) {
+    process.stderr.write("run: --config is required\n");
+    return 1;
+  }
+  if (values.mode !== undefined && values.mode !== "report" && values.mode !== "auto") {
+    process.stderr.write(`run: --mode must be report or auto, not "${values.mode}"\n`);
+    return 1;
+  }
+
+  const config = await loadBotConfig(values.config);
+  const controller = new AbortController();
+  let interrupts = 0;
+  const stop = () => {
+    interrupts += 1;
+    if (interrupts > 1) process.exit(130); // second Ctrl-C: don't wait for pending actions
+    process.stderr.write("stopping… (Ctrl-C again to force)\n");
+    controller.abort();
+  };
+  process.on("SIGINT", stop);
+  process.on("SIGTERM", stop);
+
+  const summary = await runBot(config, {
+    ...(values.mode ? { mode: values.mode as "report" | "auto" } : {}),
+    ...(values["dry-run"] ? { dryRun: true } : {}),
+    fast: values.fast,
+    once: values.once,
+    signal: controller.signal,
+  });
+  process.stderr.write(`\n${formatSummary(summary)}\n`);
   return 0;
 }
 
