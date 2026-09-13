@@ -1,0 +1,23 @@
+{
+  "name": "@cam-guard/detector-nudenet",
+  "version": "0.1.0",
+  "description": "NudeNet (YOLOv8, ONNX) detector for cam-guard — runs locally on CPU",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@cam-guard/core": "workspace:*",
+    "onnxruntime-node": "^1.20.0",
+    "sharp": "^0.34.0"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "@cam-guard/bot",
+  "version": "0.1.0",
+  "description": "cam-guard command line: detect on images, run the moderation bot",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "cam-guard": "./dist/cli.js"
+  },
+  "files": ["dist"],
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@cam-guard/core": "workspace:*",
+    "@cam-guard/detector-nudenet": "workspace:*"
+  }
+}

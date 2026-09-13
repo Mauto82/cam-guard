@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.tsbuildinfo
+coverage/
+.DS_Store
+
+# Model weights are downloaded on first use, never committed.
+*.onnx
+models/
+
+# Evidence may contain real frames of real people.
+evidence/

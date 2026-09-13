@@ -1,0 +1,10 @@
+packages:
+  - packages/*
+  - apps/*
+
+# Dependencies allowed to run install scripts. esbuild (via vitest) fetches
+# its platform binary; onnxruntime-node and sharp are native addons.
+allowBuilds:
+  esbuild: true
+  onnxruntime-node: true
+  sharp: true

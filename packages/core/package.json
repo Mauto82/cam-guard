@@ -1,0 +1,22 @@
+{
+  "name": "@cam-guard/core",
+  "version": "0.1.0",
+  "description": "Policy engine, scheduler and evidence store for local webcam moderation",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "yaml": "^2.6.0",
+    "zod": "^3.24.0"
+  }
+}

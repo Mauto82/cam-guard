@@ -1,0 +1,79 @@
+# cam-guard — example policy.
+# Validated by the test suite, so what you read here is what the engine accepts.
+
+version: 1
+
+# Rules are shared across profiles through YAML anchors.
+x-rules:
+  explicit-nudity: &explicit-nudity
+    id: explicit-nudity
+    labels:
+      - FEMALE_GENITALIA_EXPOSED
+      - MALE_GENITALIA_EXPOSED
+      - ANUS_EXPOSED
+      - FEMALE_BREAST_EXPOSED
+      - BUTTOCKS_EXPOSED
+    minArea: 0.002            # ignore boxes smaller than 0.2% of the frame
+    consecutiveFrames: 3      # three frames in a row before anything fires
+    rearmAfter: 60s
+    report:
+      threshold: 0.6
+      actions: [report]
+    act:
+      threshold: 0.85
+      window: 24h             # offences within 24 h escalate
+      steps:
+        # 1st offence: close the camera and warn
+        - - report
+          - close_cam
+          - type: warn
+            message: "La tua webcam è stata chiusa: in questa stanza il nudo non è consentito."
+        # 2nd offence (and any later one) within 24 h: kick and suspend
+        - - report
+          - type: kick
+            message: "Nudo ripetuto in una stanza dove non è consentito."
+          - type: suspend
+            hours: 24
+            message: "Nudo ripetuto in una stanza dove non è consentito."
+        # A permanent ban is never automatic: moderators decide from the dashboard.
+
+  child-present: &child-present
+    id: child-present
+    labels: [CHILD_PRESENT]
+    consecutiveFrames: 3
+    act:
+      threshold: 0.8
+      # No `window`: no automatic escalation. Each case repeats this step and
+      # increments a counter visible to moderators.
+      steps:
+        - - report
+          - type: warn
+            message: "Non è consentito avere minori davanti alla webcam. Verrai disconnesso tra 5 secondi."
+          - type: kick
+            delay: 5s
+            message: "Minore presente davanti alla webcam."
+
+profiles:
+  strict:
+    rules:
+      - *explicit-nudity
+      - *child-present
+
+  # Rooms where nudity between adults is allowed: only report it, never act.
+  adults:
+    rules:
+      - <<: *explicit-nudity
+        report:
+          threshold: 0.85
+          actions: [report]
+        act: null
+      - *child-present
+
+rooms:
+  default: strict
+  overrides:
+    "adults-*": adults
+    "test-room": "off"
+
+memory:
+  idleTtl: 48h
