@@ -1,4 +1,6 @@
-# cam-guard
+# Giorgia
+
+*`cam-guard` — codename Giorgia.*
 
 Local, automatic moderation of webcams in video chats. Pluggable sources hand
 it **still frames** (never video streams), local detectors score them, a
