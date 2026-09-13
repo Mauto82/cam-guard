@@ -126,6 +126,17 @@ points take a module path instead of built-in code:
 - `source: { module: ./my-source.mjs, options: {…} }` — a module whose
   default export `(options) => Source` grabs frames from wherever you like.
 
+## Docker
+
+```bash
+docker build -t cam-guard .
+docker run -v ./my-config:/config -v cam-guard-data:/data cam-guard
+```
+
+`/config` holds `bot.yaml` and everything it references (policy, source and
+adapters modules); `/data` holds the model cache (`/data/models`) and is the
+natural place for evidence. The first start downloads the 320n model.
+
 ## The pipeline in code
 
 ```ts
