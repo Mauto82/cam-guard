@@ -19,10 +19,16 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.json tsconfig.base
 COPY packages ./packages
 COPY apps ./apps
 
-# Build with dev dependencies, then keep only what runs.
+# Build with dev dependencies, then keep only what runs: production
+# dependencies, ONNX Runtime binaries for this platform only (the package ships
+# every OS and architecture), and no package-manager store or cache. All in one
+# layer, or the deleted files would still weigh on the image.
 RUN COREPACK_ENABLE_DOWNLOAD_PROMPT=0 pnpm install --frozen-lockfile \
  && pnpm build \
- && CI=true pnpm install --prod --frozen-lockfile
+ && CI=true pnpm install --prod --frozen-lockfile \
+ && ORT="$(cd packages/detector-nudenet && node -p "require('path').dirname(require.resolve('onnxruntime-node/package.json'))")" \
+ && find "$ORT/bin" -mindepth 3 -maxdepth 3 -type d ! -path "*/$(node -p process.platform)/$(node -p process.arch)" -exec rm -rf {} + \
+ && rm -rf /root/.local/share/pnpm /root/.cache
 
 ENV CAM_GUARD_MODELS_DIR=/data/models \
     NODE_ENV=production
