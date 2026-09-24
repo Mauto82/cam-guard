@@ -123,6 +123,12 @@ points take a module path instead of built-in code:
 - `adapters:` — your platform's `warn`, `closeCam`, `kick`, `suspend`
   (named or default exports); needed only in `auto` mode. Template:
   [`examples/adapters.example.mjs`](examples/adapters.example.mjs).
+  An optional `report(subject, notice)` export hears every report- and
+  act-level decision **in any mode** — rule, level, offence, top score,
+  label, hits, evidence id and the frame that tipped it — so your staff can
+  review cases in their own tools. Telling staff is not an action on the
+  user, so `report` mode calls it too. It runs off the detection loop; if it
+  throws, the error is logged and the bot goes on.
 - `source: { module: ./my-source.mjs, options: {…} }` — a module whose
   default export `(options) => Source` grabs frames from wherever you like.
 

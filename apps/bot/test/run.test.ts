@@ -127,6 +127,31 @@ describe("runBot on a folder source", () => {
     expect(summary.actions).toEqual({ done: 2 });
   });
 
+  it("an adapters `report` export hears every report, with the frame, even in report mode", async () => {
+    const adapters = join(dir, "adapters.mjs");
+    await writeFile(
+      adapters,
+      `const seen = (globalThis.__camGuardReports ??= []);
+       export const report = async (u, n) => { seen.push([u.userId, n.level, n.topScore, n.image.bytes.length > 0, n.image.mime]); };`,
+    );
+    (globalThis as { __camGuardReports?: unknown[] }).__camGuardReports = [];
+    const summary = await run({ adapters: "adapters.mjs" });
+    await new Promise((r) => setTimeout(r, 0)); // the hook runs off the loop
+    const seen = (globalThis as { __camGuardReports?: unknown[][] }).__camGuardReports!;
+    expect(seen.map((x) => x.slice(0, 2)).sort()).toEqual([["alice", "act"], ["carol", "report"]]);
+    expect(seen.every((x) => x[3] === true && x[4] === "image/png")).toBe(true);
+    expect(summary.actions).toEqual({ report_only: 2 }); // still nothing done to anyone
+  });
+
+  it("a failing report hook is logged, the bot goes on", async () => {
+    const adapters = join(dir, "adapters.mjs");
+    await writeFile(adapters, `export const report = async () => { throw new Error("platform down"); };`);
+    const summary = await run({ adapters: "adapters.mjs" });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(summary.reports).toBe(2);
+    expect(lines.join("\n")).toMatch(/report hook failed: platform down/);
+  });
+
   it("auto mode without adapters refuses to start, unless it is a dry run", async () => {
     await expect(run({ mode: "auto" })).rejects.toThrow(/needs `adapters`/);
     const summary = await run({ mode: "auto", dryRun: true });

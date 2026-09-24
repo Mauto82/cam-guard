@@ -10,6 +10,7 @@ import {
   type ActionOutcome,
   type Detector,
   type Source,
+  type Subject,
 } from "@cam-guard/core";
 import { NudeNetDetector } from "@cam-guard/detector-nudenet";
 import type { BotConfig } from "./config.js";
@@ -63,6 +64,36 @@ async function loadAdapters(path: string): Promise<ActionAdapters> {
   }
   if (Object.keys(adapters).length === 0) throw new Error(`adapters ${path}: exports none of warn, closeCam, kick, suspend`);
   return adapters;
+}
+
+/**
+ * What an optional `report` export of the adapters module receives: every
+ * decision at report or act level, in any mode — telling the platform's staff
+ * is not an action on the user, so `report` mode calls it too.
+ */
+export interface ReportNotice {
+  ruleId: string;
+  level: string;
+  /** 1-based offence number at act level, 0 otherwise. */
+  offence: number;
+  topScore: number;
+  label: string | null;
+  hits: number;
+  frames: number;
+  evidenceId: string | null;
+  /** The frame that tipped the decision. */
+  image: { bytes: Uint8Array; mime: string };
+  capturedAt: number;
+}
+export type ReportHook = (subject: Subject, notice: ReportNotice) => Promise<void> | void;
+
+async function loadReportHook(path: string): Promise<ReportHook | undefined> {
+  const mod = await importModule(path);
+  const candidate = (mod.default ?? mod) as Record<string, unknown>;
+  const fn = candidate.report;
+  if (fn === undefined) return undefined;
+  if (typeof fn !== "function") throw new Error(`adapters ${path}: \`report\` is not a function`);
+  return fn as ReportHook;
 }
 
 async function loadSource(cfg: BotConfig, now: () => number): Promise<Source> {
@@ -126,6 +157,8 @@ export async function runBot(cfg: BotConfig, opts: RunOptions = {}): Promise<Run
   if (missing.length) {
     log("warn", { unknownLabels: missing }, `policy uses labels no detector emits, those rules will never fire: ${missing.join(", ")}`);
   }
+
+  const reportHook = cfg.adapters ? await loadReportHook(cfg.adapters) : undefined;
 
   let adapters: ActionAdapters | undefined;
   if (mode === "auto" && !dryRun) {
@@ -198,8 +231,26 @@ export async function runBot(cfg: BotConfig, opts: RunOptions = {}): Promise<Run
     );
   });
 
-  guard.on("report", ({ decision, evidence: record }) => {
+  guard.on("report", ({ decision, evidence: record, frame }) => {
     summary.reports += 1;
+    if (reportHook) {
+      const notice: ReportNotice = {
+        ruleId: decision.ruleId,
+        level: decision.level,
+        offence: decision.offence,
+        topScore: decision.topScore,
+        label: decision.evidence[0]?.label ?? null,
+        hits: decision.hits,
+        frames: decision.frames,
+        evidenceId: record?.id ?? null,
+        image: { bytes: frame.image.bytes, mime: frame.image.mime },
+        capturedAt: frame.capturedAt,
+      };
+      // Never blocks the loop, never takes the bot down.
+      Promise.resolve()
+        .then(() => reportHook(decision.subject, notice))
+        .catch((err: unknown) => log("error", { message: `report hook: ${(err as Error).message ?? err}` }, `report hook failed: ${(err as Error).message ?? err}`));
+    }
     if (record) summary.evidence.push(record.id);
     // Whoever was just reported is worth a closer look for a while.
     scheduler.prioritize(decision.subject.userId, 5 * 60_000);

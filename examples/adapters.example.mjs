@@ -28,3 +28,11 @@ export async function kick(subject, reason) {
 export async function suspend(subject, hours, reason) {
   log("suspend", subject.userId, `for ${hours} h`, "—", reason);
 }
+
+/**
+ * Optional: every report- and act-level decision, in any mode, with the frame
+ * (`notice.image.bytes`, `notice.image.mime`) — e.g. for a staff review queue.
+ */
+export async function report(subject, notice) {
+  log("report", subject.userId, "in", subject.roomId, notice.level, notice.label, notice.topScore.toFixed(2));
+}
