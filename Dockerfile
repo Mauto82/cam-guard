@@ -34,5 +34,8 @@ ENV CAM_GUARD_MODELS_DIR=/data/models \
     NODE_ENV=production
 VOLUME /data
 
-ENTRYPOINT ["node", "/app/apps/bot/dist/cli.js"]
+# Not root: the bot runs as `node` (the image's own user); docker-entrypoint.sh
+# only gives /data to it first. /config is read-only and only read.
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+ENTRYPOINT ["docker-entrypoint.sh", "node", "/app/apps/bot/dist/cli.js"]
 CMD ["run", "--config", "/config/bot.yaml"]

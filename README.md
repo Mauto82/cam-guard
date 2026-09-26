@@ -143,6 +143,10 @@ docker run -v ./my-config:/config -v cam-guard-data:/data cam-guard
 adapters modules); `/data` holds the model cache (`/data/models`) and is the
 natural place for evidence. The first start downloads the 320n model.
 
+The bot runs as the unprivileged user `node`: `docker-entrypoint.sh` starts as
+root only to give `/data` to `node` (recursively, the first time the volume
+still belongs to root), then hands over with `setpriv`. `/config` is only read.
+
 ## The pipeline in code
 
 ```ts
